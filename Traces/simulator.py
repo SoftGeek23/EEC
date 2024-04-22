@@ -106,49 +106,95 @@ def calculate_average_access_time(total_time_ns, total_accesses):
     return total_time_ns / total_accesses if total_accesses else float('inf')
 
 associativities = [2, 4, 8]
+trace_files = [
+    './Spec_Benchmark/008.espresso.din', 
+    './Spec_Benchmark/013.spice2g6.din', 
+    './Spec_Benchmark/015.doduc.din', 
+    './Spec_Benchmark/022.li.din', 
+    './Spec_Benchmark/023.eqntott.din', 
+    './Spec_Benchmark/026.compress.din', 
+    './Spec_Benchmark/034.mdljdp2.din', 
+    './Spec_Benchmark/039.wave5.din', 
+    './Spec_Benchmark/047.tomcatv.din', 
+    './Spec_Benchmark/048.ora.din', 
+    './Spec_Benchmark/085.gcc.din', 
+    './Spec_Benchmark/089.su2cor.din', 
+    './Spec_Benchmark/090.hydro2d.din', 
+    './Spec_Benchmark/093.nasa7.din',
+    './Spec_Benchmark/094.fpppp.din']
 
 # Open the output file in append mode
-with open('output.txt', 'a') as file:
-    for l2_assoc in associativities:
-        # Initialize or reset simulation state
-        l1_hits, l1_misses, l2_hits, l2_misses = 0, 0, 0, 0
-        l1_energy_j, l2_energy_j = 0, 0
-        time_ns, energy_j = 0, 0
+# Open the output file in append mode
+with open('output.txt', 'a') as output_file:
+    # Run for each trace file
+    for trace_file_path in trace_files:
+        # Run for each associativity
+        for l2_assoc in associativities:
+            # Initialize total values for averages
+            total_l1_energy_j, total_l2_energy_j = 0, 0
+            total_time_ns, total_energy_j = 0, 0
+            # Run a trace for 10 times to get averages
+            for run in range(10):
+                # Initialize or reset simulation state
+                l1_hits, l1_misses, l2_hits, l2_misses = 0, 0, 0, 0
+                l1_energy_j, l2_energy_j = 0, 0
+                time_ns, energy_j = 0, 0
 
-        # Reconfigure cache structures
-        l2_sets = L2_SIZE // (l2_assoc * LINE_SIZE)
-        l1_cache = [None] * (L1_SIZE // LINE_SIZE)
-        l2_cache = [[None for _ in range(l2_assoc)] for _ in range(l2_sets)]
+                # Reconfigure cache structures
+                l2_sets = L2_SIZE // (l2_assoc * LINE_SIZE)
+                l1_cache = [None] * (L1_SIZE // LINE_SIZE)
+                l2_cache = [[None for _ in range(l2_assoc)] for _ in range(l2_sets)]
 
-        # Run simulation
-        total_accesses = 0
-        with open('./Spec_Benchmark/094.fpppp.din', 'r') as trace_file:
-            for line in trace_file:
-                parts = line.strip().split()
-                if len(parts) < 2:
-                    continue
-                access_type, address_hex = parts[0], parts[1]
-                address = int(address_hex, 16)
-                result = simulate_access(address, write=access_type == '1')
-                total_accesses += 1
-                if result == 'L1 Hit':
-                    l1_hits += 1
-                elif result == 'L2 Hit':
-                    l2_hits += 1
-                else:
-                    l1_misses += 1
-                    l2_misses += 1
+                # Run simulation
+                total_accesses = 0
+                with open(trace_file_path, 'r') as trace_file:
+                    for line in trace_file:
+                        parts = line.strip().split()
+                        if len(parts) < 2:
+                            continue
+                        access_type, address_hex = parts[0], parts[1]
+                        address = int(address_hex, 16)
+                        result = simulate_access(address, write=access_type == '1')
+                        total_accesses += 1
+                        if result == 'L1 Hit':
+                            l1_hits += 1
+                        elif result == 'L2 Hit':
+                            l2_hits += 1
+                        else:
+                            l1_misses += 1
+                            l2_misses += 1
 
-        average_access_time_ns = calculate_average_access_time(time_ns, total_accesses)
+                # Accumulate results for averaging
+                total_l1_energy_j += l1_energy_j
+                total_l2_energy_j += l2_energy_j
+                total_time_ns += time_ns
+                total_energy_j += energy_j
+                
+                average_access_time_ns = calculate_average_access_time(time_ns, total_accesses)
 
-        # Output results for the current set associativity
-        print("094.fpppp.din", file=file)
-        print(f"Set Associativity: {l2_assoc}", file=file)
-        print(f"L1 Cache Hits: {l1_hits}", file=file)
-        print(f"L1 Cache Misses: {l1_misses}", file=file)
-        print(f"L2 Cache Hits: {l2_hits}", file=file)
-        print(f"L2 Cache Misses: {l2_misses}", file=file)
-        print(f"L1 Cache Energy Consumed: {l1_energy_j} J", file=file)
-        print(f"L2 Cache Energy Consumed: {l2_energy_j} J", file=file)
-        print(f"Average memory access time: {average_access_time_ns} ns", file=file)
-        print("\n", file=file)
+                # Output results for the current set associativity
+                print("094.fpppp.din", file=output_file)
+                print(f"Set Associativity: {l2_assoc}", file=output_file)
+                print(f"L1 Cache Hits: {l1_hits}", file=output_file)
+                print(f"L1 Cache Misses: {l1_misses}", file=output_file)
+                print(f"L2 Cache Hits: {l2_hits}", file=output_file)
+                print(f"L2 Cache Misses: {l2_misses}", file=output_file)
+                print(f"L1 Cache Energy Consumed: {l1_energy_j} J", file=output_file)
+                print(f"L2 Cache Energy Consumed: {l2_energy_j} J", file=output_file)
+                print(f"Average memory access time: {average_access_time_ns} ns", file=output_file)
+                print("\n", file=output_file)
+
+            # Calculate and print averages after 10 runs
+            average_l1_energy = total_l1_energy_j / 10
+            average_l2_energy = total_l2_energy_j / 10
+            average_total_energy = total_energy_j / 10
+            average_time = total_time_ns / 10
+
+            # Output results for the current set associativity
+            print(f"File: {trace_file_path}", file=output_file)
+            print(f"Set Associativity: {l2_assoc}", file=output_file)
+            print(f"Average L1 Energy Consumed: {average_l1_energy} J", file=output_file)
+            print(f"Average L2 Energy Consumed: {average_l2_energy} J", file=output_file)
+            print(f"Average Total Energy Consumed: {average_total_energy} J", file=output_file)
+            print(f"Average Simulation Time: {average_time} ns", file=output_file)
+            print("\n", file=output_file)
