@@ -1,3 +1,5 @@
+Project Partners: Moksh Nirvaan, Kevin Taing
+
 EEC Cache simulator project
 
 To run this project, download or clone the project, cd into the Traces directory. Make sure Traces is the root directory. To run the simulator:
