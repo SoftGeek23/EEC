@@ -2,13 +2,17 @@ import random
 import os
 
 # Constants based on project specifications
-L1_SIZE = 32 * 1024  # 32 KB
+L1_DATA_SIZE = 32 * 1024  # 32 KB for data
+L1_INST_SIZE = 32 * 1024  # 32 KB for instructions
 L2_SIZE = 256 * 1024  # 256 KB
 DRAM_SIZE = 8 * 1024 * 1024 * 1024  # 8 GB
 LINE_SIZE = 64  # 64 bytes
 L1_ACCESS_TIME = 0.5e-9  # 0.5 ns
 L2_ACCESS_TIME = 5e-9  # 5 ns
 DRAM_ACCESS_TIME = 50e-9  # 50 ns
+DRAM_energy_j = 0  # Total energy consumed by DRAM accesses
+DRAM_accesses = 0  # Count of DRAM accesses
+
 
 # Power consumption values
 L1_POWER_IDLE = 0.5  # Watts
@@ -24,7 +28,9 @@ DRAM_TRANSFER_PENALTY = 640e-12  # 640 pJ
 
 # Cache data structures
 l1_cache = []
-l2_cache = []
+l2_cache = [[None for _ in range(4)] for _ in range(L2_SIZE // (4 * LINE_SIZE))]  # Set associativity of 4
+l1_data_cache = [None] * (L1_DATA_SIZE // LINE_SIZE)
+l1_inst_cache = [None] * (L1_INST_SIZE // LINE_SIZE)
 write_queue_l2 = []
 write_queue_dram = []
 
@@ -45,11 +51,14 @@ def perform_writes(write_queue, write_time, power_active):
         time_ns += write_time
         energy_j += power_active * write_time
 
-def simulate_access(address, write=False):
-    global time_ns, energy_j, l1_energy_j, l2_energy_j, l1_cache, l2_cache
-    l1_index = (address // LINE_SIZE) % (L1_SIZE // LINE_SIZE)
+def simulate_access(address, write=False, is_instruction=False):
+    global time_ns, energy_j, l1_data_hits, l1_data_misses, l1_inst_hits, l1_inst_misses, l2_hits, l2_misses, DRAM_accesses, DRAM_energy_j, l1_data_energy_j, l1_inst_energy_j, l2_energy_j
+    l1_cache = l1_inst_cache if is_instruction else l1_data_cache
+    l1_energy = l1_inst_energy_j if is_instruction else l1_data_energy_j
+
+    l1_index = (address // LINE_SIZE) % (len(l1_cache))
     l2_index = (address // LINE_SIZE) % len(l2_cache)
-    tag = address // (LINE_SIZE * (L1_SIZE // LINE_SIZE))
+    tag = address // (LINE_SIZE * len(l1_cache))
 
     # Check L1 cache
     l1_hit = l1_cache[l1_index] == tag
@@ -57,15 +66,26 @@ def simulate_access(address, write=False):
         # L1 hit
         time_ns += L1_ACCESS_TIME
         energy_j += L1_POWER_RW * L1_ACCESS_TIME
-        l1_energy_j += L1_POWER_RW * L1_ACCESS_TIME
+        l1_energy += L1_POWER_RW * L1_ACCESS_TIME
+        if is_instruction:
+            l1_inst_hits += 1
+            l1_inst_energy_j += L1_POWER_RW * L1_ACCESS_TIME  # Correct cumulative energy addition
+        else:
+            l1_data_hits += 1
+            l1_data_energy_j += L1_POWER_RW * L1_ACCESS_TIME  # Correct cumulative energy addition
     else:
         # L1 miss, move on to check L2
         l1_cache[l1_index] = tag
         time_ns += L1_ACCESS_TIME
         energy_j += L1_POWER_RW * L1_ACCESS_TIME
-        l1_energy_j += L1_POWER_RW * L1_ACCESS_TIME
+        l1_energy += L1_POWER_RW * L1_ACCESS_TIME
+        if is_instruction:
+            l1_inst_misses += 1
+            l1_inst_energy_j += L1_POWER_RW * L1_ACCESS_TIME  # Correct cumulative energy addition
+        else:
+            l1_data_misses += 1
+            l1_data_energy_j += L1_POWER_RW * L1_ACCESS_TIME  # Correct cumulative energy addition
 
-        # Simulate L2 cache access
         l2_set = l2_cache[l2_index]
         l2_hit = False
         for i in range(len(l2_set)):
@@ -74,31 +94,20 @@ def simulate_access(address, write=False):
                 l2_hit = True
                 time_ns += L2_ACCESS_TIME
                 energy_j += L2_POWER_RW * L2_ACCESS_TIME + L2_TRANSFER_PENALTY
+                l2_hits += 1
                 break
         
         if not l2_hit:
-            # L2 miss, replace a random entry in the set
+            # L2 miss, manage DRAM access
             replaced_index = random.randint(0, len(l2_set) - 1)
             replaced_tag = l2_set[replaced_index]
-            if replaced_tag is not None and write:  # Write-back condition
-                write_queue_dram.append((l2_index * LINE_SIZE + replaced_tag, replaced_tag))
             l2_set[replaced_index] = tag
             time_ns += L2_ACCESS_TIME + DRAM_ACCESS_TIME
             l2_energy_j += L2_POWER_RW * L2_ACCESS_TIME + L2_TRANSFER_PENALTY
             energy_j += (L2_POWER_RW * L2_ACCESS_TIME) + (DRAM_POWER_RW * DRAM_ACCESS_TIME) + DRAM_TRANSFER_PENALTY
-
-    # Write-back to L2 on L1 update or eviction
-    if write:
-        if not l1_hit:
-            # This implies the L1 cache line being replaced needs to be written back to L2
-            evicted_address = (l1_cache[l1_index] << (L1_SIZE // LINE_SIZE).bit_length()) | (l1_index * LINE_SIZE)
-            write_queue_l2.append((evicted_address, l1_cache[l1_index]))
-    
-    l1_cache[l1_index] = tag  # Load the new data into L1
-
-    # Perform pending writes asynchronously (no delay in simulation time for writes)
-    perform_writes(write_queue_l2, L2_ACCESS_TIME, L2_POWER_RW)
-    perform_writes(write_queue_dram, DRAM_ACCESS_TIME, DRAM_POWER_RW)
+            DRAM_energy_j += DRAM_POWER_RW * DRAM_ACCESS_TIME
+            DRAM_accesses += 1
+            l2_misses += 1
 
     return 'L1 Hit' if l1_hit else ('L2 Hit' if l2_hit else 'DRAM Hit')
 
@@ -125,24 +134,28 @@ trace_files = [
 
 # Open the output file in append mode
 # Open the output file in append mode
+# Open the output file in append mode
 with open('output.txt', 'a') as output_file:
     # Run for each trace file
     for trace_file_path in trace_files:
+        print(f"File: {trace_file_path}", file=output_file)
         # Run for each associativity
         for l2_assoc in associativities:
+            print(f"Set Associativity: {l2_assoc}", file=output_file)
             # Initialize total values for averages
-            total_l1_energy_j, total_l2_energy_j = 0, 0
+            total_l1_data_energy_j, total_l1_inst_energy_j, total_l2_energy_j, total_dram_energy_j = 0, 0, 0, 0
             total_time_ns, total_energy_j = 0, 0
             # Run a trace for 10 times to get averages
             for run in range(10):
                 # Initialize or reset simulation state
-                l1_hits, l1_misses, l2_hits, l2_misses = 0, 0, 0, 0
-                l1_energy_j, l2_energy_j = 0, 0
+                l1_data_hits, l1_data_misses, l1_inst_hits, l1_inst_misses, l2_hits, l2_misses = 0, 0, 0, 0, 0, 0
+                l1_data_energy_j, l1_inst_energy_j, l2_energy_j, dram_energy_j = 0, 0, 0, 0
                 time_ns, energy_j = 0, 0
 
                 # Reconfigure cache structures
                 l2_sets = L2_SIZE // (l2_assoc * LINE_SIZE)
-                l1_cache = [None] * (L1_SIZE // LINE_SIZE)
+                l1_data_cache = [None] * (L1_DATA_SIZE // LINE_SIZE)
+                l1_inst_cache = [None] * (L1_INST_SIZE // LINE_SIZE)
                 l2_cache = [[None for _ in range(l2_assoc)] for _ in range(l2_sets)]
 
                 # Run simulation
@@ -152,49 +165,61 @@ with open('output.txt', 'a') as output_file:
                         parts = line.strip().split()
                         if len(parts) < 2:
                             continue
-                        access_type, address_hex = parts[0], parts[1]
+                        op_type, address_hex = int(parts[0]), parts[1]
                         address = int(address_hex, 16)
-                        result = simulate_access(address, write=access_type == '1')
+                        is_instruction = (op_type == 2)
+                        write = (op_type == 1)
+                        result = simulate_access(address, write=write, is_instruction=is_instruction)
                         total_accesses += 1
                         if result == 'L1 Hit':
-                            l1_hits += 1
+                            if is_instruction:
+                                l1_inst_hits += 1
+                            else:
+                                l1_data_hits += 1
                         elif result == 'L2 Hit':
                             l2_hits += 1
                         else:
-                            l1_misses += 1
+                            if is_instruction:
+                                l1_inst_misses += 1
+                            else:
+                                l1_data_misses += 1
                             l2_misses += 1
 
                 # Accumulate results for averaging
-                total_l1_energy_j += l1_energy_j
+                total_l1_data_energy_j += l1_data_energy_j
+                total_l1_inst_energy_j += l1_inst_energy_j
                 total_l2_energy_j += l2_energy_j
+                total_dram_energy_j += dram_energy_j
                 total_time_ns += time_ns
                 total_energy_j += energy_j
-                
+
                 average_access_time_ns = calculate_average_access_time(time_ns, total_accesses)
 
                 # Output results for the current set associativity
-                print("094.fpppp.din", file=output_file)
-                print(f"Set Associativity: {l2_assoc}", file=output_file)
-                print(f"L1 Cache Hits: {l1_hits}", file=output_file)
-                print(f"L1 Cache Misses: {l1_misses}", file=output_file)
-                print(f"L2 Cache Hits: {l2_hits}", file=output_file)
-                print(f"L2 Cache Misses: {l2_misses}", file=output_file)
-                print(f"L1 Cache Energy Consumed: {l1_energy_j} J", file=output_file)
-                print(f"L2 Cache Energy Consumed: {l2_energy_j} J", file=output_file)
-                print(f"Average memory access time: {average_access_time_ns} ns", file=output_file)
+                print(f"L1 Data Cache Hits: {l1_data_hits}, Misses: {l1_data_misses}", file=output_file)
+                print(f"L1 Inst Cache Hits: {l1_inst_hits}, Misses: {l1_inst_misses}", file=output_file)
+                print(f"L2 Cache Hits: {l2_hits}, Misses: {l2_misses}", file=output_file)
+                print(f"L1 Data Energy: {l1_data_energy_j} J, L1 Inst Energy: {l1_inst_energy_j} J", file=output_file)
+                print(f"L2 Energy: {l2_energy_j} J, DRAM Energy: {dram_energy_j} J", file=output_file)
+                print(f"Total Energy: {energy_j} J", file=output_file)
+                print(f"Average Memory Access Time: {average_access_time_ns} ns", file=output_file)
+                print(f"Total Time: {time_ns} ns", file=output_file)
                 print("\n", file=output_file)
 
             # Calculate and print averages after 10 runs
-            average_l1_energy = total_l1_energy_j / 10
+            average_l1_data_energy = total_l1_data_energy_j / 10
+            average_l1_inst_energy = total_l1_inst_energy_j / 10
             average_l2_energy = total_l2_energy_j / 10
+            average_dram_energy = total_dram_energy_j / 10
             average_total_energy = total_energy_j / 10
             average_time = total_time_ns / 10
 
-            # Output results for the current set associativity
-            print(f"File: {trace_file_path}", file=output_file)
-            print(f"Set Associativity: {l2_assoc}", file=output_file)
-            print(f"Average L1 Energy Consumed: {average_l1_energy} J", file=output_file)
-            print(f"Average L2 Energy Consumed: {average_l2_energy} J", file=output_file)
-            print(f"Average Total Energy Consumed: {average_total_energy} J", file=output_file)
+            # Output averaged results for the current set associativity
+            print(f"File: {trace_file_path}, Set Associativity: {l2_assoc}", file=output_file)
+            print(f"Average L1 Data Energy: {average_l1_data_energy} J", file=output_file)
+            print(f"Average L1 Inst Energy: {average_l1_inst_energy} J", file=output_file)
+            print(f"Average L2 Energy: {average_l2_energy} J", file=output_file)
+            print(f"Average DRAM Energy: {average_dram_energy} J", file=output_file)
+            print(f"Average Total Energy: {average_total_energy} J", file=output_file)
             print(f"Average Simulation Time: {average_time} ns", file=output_file)
             print("\n", file=output_file)
