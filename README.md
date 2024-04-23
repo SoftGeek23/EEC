@@ -9,4 +9,4 @@ To run this project, download or clone the project, cd into the Traces directory
 3. Then, run ./run.sh in the terminal
 4. View output results in an output.txt file in the directory. 
 
-The output is constructed by looping through each trace file and testing the traces with the different associativity levels(2,4,8) and outputting the results- which can be seen in the attached submission pdf. 
+The output is constructed by looping through each trace file and testing the traces with the different associativity levels(2,4,8) and outputting the results- which can be seen in the cache_values pdf. 
